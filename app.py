@@ -15,7 +15,7 @@ import streamlit as st
 # ------------------------------------------------------------
 st.set_page_config(page_title="Weekly Share Predictor", layout="centered")
 
-st.title("📈 Weekly Share Price Prediction")
+st.title(" Weekly Share Price Prediction")
 st.write("Free | Web-based | Learns weekly")
 
 # ------------------------------------------------------------
@@ -61,7 +61,7 @@ model.fit(X, y)
 # ------------------------------------------------------------
 last_price = weekly.iloc[-1]['Close']
 
-# 🔑 CRITICAL FIX: prediction input must be a DataFrame
+#  CRITICAL FIX: prediction input must be a DataFrame
 X_pred = pd.DataFrame([[last_price]], columns=["prev_close"])
 prediction = model.predict(X_pred)[0]
 
@@ -91,7 +91,7 @@ if not history.empty:
 new_row = {
     "date": datetime.today().strftime("%Y-%m-%d"),
     "last_week_price": round(last_price, 2),
-    "predicted_next_week": round(prediction, 2),
+    "predicted_next_week": round(float(prediction), 2),
     "actual_next_week": np.nan
 }
 
