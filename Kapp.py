@@ -1,26 +1,27 @@
 # ============================================================
-# PORTFOLIO STOCK PREDICTION APP (STREAMLIT CLOUD)
+# MULTI-STOCK DAILY ROLLING PREDICTION APP
 # ============================================================
 
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import LinearRegression
 import streamlit as st
+from sklearn.linear_model import LinearRegression
 from datetime import datetime
 import os
 
-st.set_page_config(page_title="Portfolio Prediction", layout="wide")
-st.title("📊 My Portfolio – Weekly Prediction Dashboard")
+st.set_page_config(page_title="Portfolio Daily Predictor", layout="wide")
+st.title("📊 Portfolio – Daily Prediction vs Actual")
+st.write("Runs daily | Grows day by day | Honest ML")
 
-# -------------------------
-# Your Portfolio
-# -------------------------
+# ------------------------------------------------------------
+# PORTFOLIO (Your holdings)
+# ------------------------------------------------------------
 PORTFOLIO = {
     "ANANTRAJ": "ANANTRAJ.NS",
     "ARVINDFASN": "ARVINDFASN.NS",
     "HAVELLS": "HAVELLS.NS",
-    "HCL-INSYS": "HCLINSYS.NS",
+    "HCLINSYS": "HCLINSYS.NS",
     "HDFCGOLD": "HDFCGOLD.NS",
     "SONATSOFTW": "SONATSOFTW.NS",
     "SULA": "SULA.NS",
@@ -30,83 +31,88 @@ PORTFOLIO = {
     "YESBANK": "YESBANK.NS"
 }
 
-HISTORY_FILE = "portfolio_predictions.csv"
+LOG_FILE = "daily_portfolio_log.csv"
+TODAY = pd.Timestamp.today().normalize()
 
-# -------------------------
-# Load history
-# -------------------------
-if os.path.exists(HISTORY_FILE):
-    history = pd.read_csv(HISTORY_FILE)
+# ------------------------------------------------------------
+# LOAD LOG
+# ------------------------------------------------------------
+if os.path.exists(LOG_FILE):
+    log = pd.read_csv(LOG_FILE, parse_dates=["date"])
 else:
-    history = pd.DataFrame(columns=[
-        "date", "stock", "actual_price", "predicted_price"
-    ])
+    log = pd.DataFrame(columns=["date", "stock", "predicted", "actual"])
 
-# -------------------------
-# Helper function
-# -------------------------
-def predict_next_week(symbol):
+# ------------------------------------------------------------
+# FUNCTION: DAILY PREDICTION
+# ------------------------------------------------------------
+def daily_predict(symbol):
     df = yf.download(symbol, period="3y", interval="1d", progress=False)
     df = df[['Close']].dropna()
 
-    weekly = df.resample('W').last()
-    weekly['prev_close'] = weekly['Close'].shift(1)
-    weekly.dropna(inplace=True)
+    df["prev_close"] = df["Close"].shift(1)
+    df.dropna(inplace=True)
 
-    X = weekly[['prev_close']]
-    y = weekly['Close']
+    X = df[["prev_close"]]
+    y = df["Close"]
 
     model = LinearRegression()
     model.fit(X, y)
 
-    last_price = float(weekly.iloc[-1]['Close'])
-    X_pred = pd.DataFrame([[last_price]], columns=["prev_close"])
-    pred = float(model.predict(X_pred)[0])
+    last_close = float(df.iloc[-1]["Close"])
+    X_pred = pd.DataFrame([[last_close]], columns=["prev_close"])
+    prediction = float(model.predict(X_pred)[0])
 
-    return weekly, last_price, pred
+    return last_close, prediction
 
-# -------------------------
-# UI LOOP
-# -------------------------
+# ------------------------------------------------------------
+# DAILY UPDATE (AUTO-SAFE)
+# ------------------------------------------------------------
 for name, symbol in PORTFOLIO.items():
+    last_close, prediction = daily_predict(symbol)
+
+    # Add row once per day per stock
+    exists = (
+        (log["date"] == TODAY).any() and
+        (log["stock"] == name).any()
+    )
+
+    if not exists:
+        log = pd.concat([
+            log,
+            pd.DataFrame([{
+                "date": TODAY,
+                "stock": name,
+                "predicted": round(prediction, 2),
+                "actual": round(last_close, 2)
+            }])
+        ], ignore_index=True)
+
+log.to_csv(LOG_FILE, index=False)
+
+# ------------------------------------------------------------
+# UI: SHOW EACH STOCK
+# ------------------------------------------------------------
+for name in PORTFOLIO.keys():
     st.markdown("---")
     st.subheader(name)
 
-    weekly, last_price, prediction = predict_next_week(symbol)
+    stock_log = log[log["stock"] == name].sort_values("date")
 
-    col1, col2, col3 = st.columns(3)
+    if stock_log.empty:
+        st.info("Waiting for data…")
+        continue
 
-    col1.metric("Last Week Price", round(last_price, 2))
-    col2.metric("Next Week Prediction", round(prediction, 2))
-    col3.metric(
-        "Predicted Change %",
-        f"{round((prediction-last_price)/last_price*100,2)}%"
+    last_row = stock_log.iloc[-1]
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Last Actual", last_row["actual"])
+    c2.metric("Predicted", last_row["predicted"])
+
+    diff = (last_row["predicted"] - last_row["actual"]) / last_row["actual"] * 100
+    c3.metric("Predicted Change %", f"{diff:.2f}%")
+
+    st.line_chart(
+        stock_log.set_index("date")[["predicted", "actual"]]
     )
 
-    # Save history
-    history = pd.concat([
-        history,
-        pd.DataFrame([{
-            "date": datetime.today().strftime("%Y-%m-%d"),
-            "stock": name,
-            "actual_price": round(last_price, 2),
-            "predicted_price": round(prediction, 2)
-        }])
-    ], ignore_index=True)
-
-    # -------------------------
-    # GRAPH: Actual vs Prediction
-    # -------------------------
-    chart_df = weekly[['Close']].copy()
-    chart_df = chart_df.rename(columns={"Close": "Actual"})
-    chart_df["Predicted"] = np.nan
-    chart_df.iloc[-1, chart_df.columns.get_loc("Predicted")] = prediction
-
-    st.line_chart(chart_df)
-
-# -------------------------
-# Save portfolio history
-# -------------------------
-history.to_csv(HISTORY_FILE, index=False)
-
-st.success("Portfolio predictions updated successfully")
+st.success("Daily predictions updated for all stocks.")
