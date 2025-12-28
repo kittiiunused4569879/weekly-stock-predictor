@@ -1,41 +1,219 @@
 # ============================================================
-# STREAMLIT APP – READ ONLY (PLOTS + DASHBOARD)
+# PORTFOLIO WEEKLY STOCK PREDICTOR (GRADIENT BOOSTING)
+# - Next-week price prediction (weekly close)
+# - Accuracy via time-series CV (MAPE -> Accuracy = 1 - MAPE)
+# - BUY/HOLD/SELL signal
+# - Real plots (3y daily + weekly + prediction point)
 # ============================================================
 
 import streamlit as st
+import yfinance as yf
 import pandas as pd
+import numpy as np
 
-st.set_page_config(page_title="Portfolio Predictor", layout="wide")
-st.title("📊 Portfolio – Daily Prediction vs Actual")
-st.write("3 years data | Daily prediction | Real plots")
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import mean_absolute_percentage_error
 
-LOG_FILE = "daily_log.csv"
+# -----------------------------
+# UI CONFIG
+# -----------------------------
+st.set_page_config(page_title="Portfolio Weekly Predictor (GB)", layout="wide")
+st.title("📊 Portfolio Weekly Predictor – Gradient Boosting")
+st.write("Next-week price prediction + accuracy + BUY/HOLD/SELL + plots (3 years real data)")
 
-if not st.secrets.get("dummy", True) and False:
-    pass
+# -----------------------------
+# PORTFOLIO (EDIT HERE)
+# -----------------------------
+PORTFOLIO = {
+    "ANANTRAJ": "ANANTRAJ.NS",
+    "ARVINDFASN": "ARVINDFASN.NS",
+    "HAVELLS": "HAVELLS.NS",
+    "HCLINSYS": "HCLINSYS.NS",
+    "HDFCGOLD": "HDFCGOLD.NS",
+    "SONATSOFTW": "SONATSOFTW.NS",
+    "SULA": "SULA.NS",
+    "SUZLON": "SUZLON.NS",
+    "TATASTEEL": "TATASTEEL.NS",
+    "UCOBANK": "UCOBANK.NS",
+    "YESBANK": "YESBANK.NS"
+}
 
-if not pd.io.common.file_exists(LOG_FILE):
-    st.error("Daily data not available yet. Run daily job.")
-    st.stop()
+# -----------------------------
+# SETTINGS
+# -----------------------------
+BUY_THRESHOLD_PCT = st.slider("BUY threshold (+%)", 0.5, 10.0, 2.0, 0.5)   # default +2%
+SELL_THRESHOLD_PCT = st.slider("SELL threshold (-%)", 0.5, 10.0, 2.0, 0.5) # default -2%
+MIN_WEEKS_REQUIRED = st.slider("Min weekly samples required", 52, 200, 80, 4)
 
-log = pd.read_csv(LOG_FILE, parse_dates=["date"])
+with st.expander("Model parameters (optional)"):
+    N_ESTIMATORS = st.slider("n_estimators", 100, 1000, 300, 50)
+    LEARNING_RATE = st.select_slider("learning_rate", options=[0.01, 0.03, 0.05, 0.08, 0.1, 0.2], value=0.05)
+    MAX_DEPTH = st.slider("max_depth", 1, 6, 3, 1)
+    SUBSAMPLE = st.select_slider("subsample", options=[0.6, 0.7, 0.8, 0.9, 1.0], value=0.8)
 
-for stock in log["stock"].unique():
+# -----------------------------
+# FEATURE ENGINEERING (WEEKLY)
+# -----------------------------
+def make_features(close: pd.Series) -> pd.DataFrame:
+    f = pd.DataFrame(index=close.index)
+
+    # returns
+    f["ret1"] = close.pct_change(1)
+    f["ret2"] = close.pct_change(2)
+    f["ret4"] = close.pct_change(4)
+    f["ret8"] = close.pct_change(8)
+
+    # moving averages
+    ma4 = close.rolling(4).mean()
+    ma8 = close.rolling(8).mean()
+    ma12 = close.rolling(12).mean()
+    ma20 = close.rolling(20).mean()
+
+    f["ma4_ma8"] = (ma4 / (ma8 + 1e-9)) - 1
+    f["ma8_ma12"] = (ma8 / (ma12 + 1e-9)) - 1
+    f["ma12_ma20"] = (ma12 / (ma20 + 1e-9)) - 1
+
+    # volatility
+    f["vol8"] = f["ret1"].rolling(8).std()
+    f["vol12"] = f["ret1"].rolling(12).std()
+
+    # momentum
+    f["mom4"] = close / (close.shift(4) + 1e-9) - 1
+    f["mom12"] = close / (close.shift(12) + 1e-9) - 1
+
+    return f
+
+# -----------------------------
+# MODEL + CV ACCURACY
+# -----------------------------
+def fit_predict_with_accuracy(weekly_close: pd.Series):
+    feats = make_features(weekly_close)
+    y = weekly_close.shift(-1)  # next-week close
+
+    data = feats.copy()
+    data["y"] = y
+    data = data.dropna()
+
+    if len(data) < MIN_WEEKS_REQUIRED:
+        return None
+
+    X = data.drop(columns=["y"])
+    y = data["y"]
+
+    model = GradientBoostingRegressor(
+        n_estimators=N_ESTIMATORS,
+        learning_rate=LEARNING_RATE,
+        max_depth=MAX_DEPTH,
+        subsample=SUBSAMPLE,
+        random_state=42
+    )
+
+    # Time series CV (no shuffle)
+    tscv = TimeSeriesSplit(n_splits=5)
+    mape_scores = []
+
+    for train_idx, test_idx in tscv.split(X):
+        model.fit(X.iloc[train_idx], y.iloc[train_idx])
+        preds = model.predict(X.iloc[test_idx])
+        mape = mean_absolute_percentage_error(y.iloc[test_idx], preds)
+        mape_scores.append(mape)
+
+    mean_mape = float(np.mean(mape_scores))
+    accuracy = max(0.0, 1.0 - mean_mape)  # clamp lower bound
+
+    # Fit on full history and predict next week
+    model.fit(X, y)
+    next_week_pred = float(model.predict(X.iloc[[-1]])[0])
+
+    return next_week_pred, accuracy, data.index
+
+def signal_from_pred(last_price: float, pred_price: float) -> str:
+    change_pct = (pred_price - last_price) / last_price * 100.0
+    if change_pct >= BUY_THRESHOLD_PCT:
+        return "BUY"
+    if change_pct <= -SELL_THRESHOLD_PCT:
+        return "SELL"
+    return "HOLD"
+
+# -----------------------------
+# MAIN LOOP
+# -----------------------------
+summary_rows = []
+
+for stock_name, symbol in PORTFOLIO.items():
     st.markdown("---")
-    st.subheader(stock)
+    st.subheader(f"{stock_name}  ({symbol})")
 
-    df = log[log["stock"] == stock].sort_values("date")
+    # Fetch 3y daily data
+    df_daily = yf.download(symbol, period="3y", interval="1d", progress=False)
 
-    c1, c2, c3 = st.columns(3)
-    last = df.iloc[-1]
+    if df_daily.empty:
+        st.error("No data received (symbol may be invalid or temporarily unavailable).")
+        continue
 
-    c1.metric("Actual", last["actual"])
-    c2.metric("Predicted", last["predicted"])
-    c3.metric(
-        "Diff %",
-        f"{((last['predicted']-last['actual'])/last['actual']*100):.2f}%"
-    )
+    df_daily = df_daily[["Close"]].dropna()
 
-    st.line_chart(
-        df.set_index("date")[["predicted","actual"]]
-    )
+    # Weekly series (last trading close each week)
+    weekly_close = df_daily["Close"].resample("W").last().dropna()
+
+    if len(weekly_close) < MIN_WEEKS_REQUIRED:
+        st.warning(f"Not enough weekly data. Have {len(weekly_close)} weeks; need {MIN_WEEKS_REQUIRED}.")
+        continue
+
+    # Predict + accuracy
+    out = fit_predict_with_accuracy(weekly_close)
+    if out is None:
+        st.warning("Not enough usable samples after feature engineering.")
+        continue
+
+    pred_price, acc, usable_index = out
+    last_week_price = float(weekly_close.iloc[-1])
+
+    sig = signal_from_pred(last_week_price, pred_price)
+    change_pct = (pred_price - last_week_price) / last_week_price * 100.0
+
+    # Metrics
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Last Week Close", f"{last_week_price:.2f}")
+    c2.metric("Predicted Next Week", f"{pred_price:.2f}")
+    c3.metric("Predicted Change %", f"{change_pct:.2f}%")
+    c4.metric("Accuracy (1 - MAPE)", f"{acc*100:.2f}%")
+
+    st.write(f"**Signal:** {sig}")
+
+    # Plots
+    left, right = st.columns(2)
+
+    with left:
+        st.caption("📈 Daily Close (Last 3 Years)")
+        st.line_chart(df_daily["Close"])
+
+    with right:
+        st.caption("📊 Weekly Close + Next-week Prediction Point")
+        plot_weekly = pd.DataFrame({"Actual": weekly_close})
+        plot_weekly["Prediction"] = np.nan
+        plot_weekly.iloc[-1, plot_weekly.columns.get_loc("Prediction")] = pred_price
+        st.line_chart(plot_weekly)
+
+    summary_rows.append({
+        "Stock": stock_name,
+        "Symbol": symbol,
+        "Last Week": round(last_week_price, 2),
+        "Pred Next Week": round(pred_price, 2),
+        "Change %": round(change_pct, 2),
+        "Signal": sig,
+        "Accuracy %": round(acc * 100, 2)
+    })
+
+# -----------------------------
+# SUMMARY TABLE
+# -----------------------------
+st.markdown("---")
+st.header("📌 Portfolio Summary")
+
+if summary_rows:
+    summary_df = pd.DataFrame(summary_rows).sort_values(by=["Signal", "Change %"], ascending=[True, False])
+    st.dataframe(summary_df, use_container_width=True)
+else:
+    st.info("No stocks produced results. Check symbols and data availability.")
