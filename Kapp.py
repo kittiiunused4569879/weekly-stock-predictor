@@ -1,113 +1,112 @@
 # ============================================================
-# WEEKLY STOCK PREDICTION APP (STREAMLIT CLOUD - HARDENED)
+# PORTFOLIO STOCK PREDICTION APP (STREAMLIT CLOUD)
 # ============================================================
 
 import yfinance as yf
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
+import streamlit as st
 from datetime import datetime
 import os
-import streamlit as st
 
-# ------------------------------------------------------------
-# Streamlit UI setup
-# ------------------------------------------------------------
-st.set_page_config(page_title="Weekly Share Predictor", layout="centered")
-st.title("📈 Weekly Share Price Prediction")
-st.write("Free | Web-based | Learns weekly")
+st.set_page_config(page_title="Portfolio Prediction", layout="wide")
+st.title("📊 My Portfolio – Weekly Prediction Dashboard")
 
-# ------------------------------------------------------------
-# Configuration
-# ------------------------------------------------------------
-SYMBOL = "HDFCGOLD.NS"
-HISTORY_FILE = "weekly_predictions.csv"
+# -------------------------
+# Your Portfolio
+# -------------------------
+PORTFOLIO = {
+    "ANANTRAJ": "ANANTRAJ.NS",
+    "ARVINDFASN": "ARVINDFASN.NS",
+    "HAVELLS": "HAVELLS.NS",
+    "HCL-INSYS": "HCLINSYS.NS",
+    "HDFCGOLD": "HDFCGOLD.NS",
+    "SONATSOFTW": "SONATSOFTW.NS",
+    "SULA": "SULA.NS",
+    "SUZLON": "SUZLON.NS",
+    "TATASTEEL": "TATASTEEL.NS",
+    "UCOBANK": "UCOBANK.NS",
+    "YESBANK": "YESBANK.NS"
+}
 
-# ------------------------------------------------------------
-# 1. Fetch data from Yahoo Finance
-# ------------------------------------------------------------
-df = yf.download(SYMBOL, period="3y", interval="1d", progress=False)
+HISTORY_FILE = "portfolio_predictions.csv"
 
-if df.empty:
-    st.error("No data received from Yahoo Finance")
-    st.stop()
-
-df = df[['Close']].dropna()
-
-# ------------------------------------------------------------
-# 2. Convert daily → weekly
-# ------------------------------------------------------------
-weekly = df.resample('W').last()
-weekly['prev_close'] = weekly['Close'].shift(1)
-weekly.dropna(inplace=True)
-
-# ------------------------------------------------------------
-# 3. Train model
-# ------------------------------------------------------------
-X = weekly[['prev_close']]
-y = weekly['Close']
-
-model = LinearRegression()
-model.fit(X, y)
-
-# ------------------------------------------------------------
-# 4. Predict next week (ABSOLUTE SAFE)
-# ------------------------------------------------------------
-last_price = float(weekly.iloc[-1]['Close'])
-
-X_pred = pd.DataFrame(
-    data=[[last_price]],
-    columns=["prev_close"]
-)
-
-raw_pred = model.predict(X_pred)
-
-# 🔐 HARD CAST (handles ndarray, numpy scalar, etc.)
-try:
-    prediction = float(raw_pred[0])
-except Exception:
-    prediction = float(np.asarray(raw_pred).ravel()[0])
-
-# ------------------------------------------------------------
-# 5. Load or create history
-# ------------------------------------------------------------
+# -------------------------
+# Load history
+# -------------------------
 if os.path.exists(HISTORY_FILE):
     history = pd.read_csv(HISTORY_FILE)
 else:
     history = pd.DataFrame(columns=[
-        "date",
-        "last_week_price",
-        "predicted_next_week",
-        "actual_next_week"
+        "date", "stock", "actual_price", "predicted_price"
     ])
 
-# ------------------------------------------------------------
-# 6. Learning step
-# ------------------------------------------------------------
-if not history.empty and pd.isna(history.iloc[-1]["actual_next_week"]):
-    history.loc[history.index[-1], "actual_next_week"] = round(last_price, 2)
+# -------------------------
+# Helper function
+# -------------------------
+def predict_next_week(symbol):
+    df = yf.download(symbol, period="3y", interval="1d", progress=False)
+    df = df[['Close']].dropna()
 
-# ------------------------------------------------------------
-# 7. Save new prediction (SAFE ROUNDING)
-# ------------------------------------------------------------
-new_row = {
-    "date": datetime.today().strftime("%Y-%m-%d"),
-    "last_week_price": round(last_price, 2),
-    "predicted_next_week": round(float(prediction), 2),
-    "actual_next_week": np.nan
-}
+    weekly = df.resample('W').last()
+    weekly['prev_close'] = weekly['Close'].shift(1)
+    weekly.dropna(inplace=True)
 
-history = pd.concat(
-    [history, pd.DataFrame([new_row])],
-    ignore_index=True
-)
+    X = weekly[['prev_close']]
+    y = weekly['Close']
+
+    model = LinearRegression()
+    model.fit(X, y)
+
+    last_price = float(weekly.iloc[-1]['Close'])
+    X_pred = pd.DataFrame([[last_price]], columns=["prev_close"])
+    pred = float(model.predict(X_pred)[0])
+
+    return weekly, last_price, pred
+
+# -------------------------
+# UI LOOP
+# -------------------------
+for name, symbol in PORTFOLIO.items():
+    st.markdown("---")
+    st.subheader(name)
+
+    weekly, last_price, prediction = predict_next_week(symbol)
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric("Last Week Price", round(last_price, 2))
+    col2.metric("Next Week Prediction", round(prediction, 2))
+    col3.metric(
+        "Predicted Change %",
+        f"{round((prediction-last_price)/last_price*100,2)}%"
+    )
+
+    # Save history
+    history = pd.concat([
+        history,
+        pd.DataFrame([{
+            "date": datetime.today().strftime("%Y-%m-%d"),
+            "stock": name,
+            "actual_price": round(last_price, 2),
+            "predicted_price": round(prediction, 2)
+        }])
+    ], ignore_index=True)
+
+    # -------------------------
+    # GRAPH: Actual vs Prediction
+    # -------------------------
+    chart_df = weekly[['Close']].copy()
+    chart_df = chart_df.rename(columns={"Close": "Actual"})
+    chart_df["Predicted"] = np.nan
+    chart_df.iloc[-1, chart_df.columns.get_loc("Predicted")] = prediction
+
+    st.line_chart(chart_df)
+
+# -------------------------
+# Save portfolio history
+# -------------------------
 history.to_csv(HISTORY_FILE, index=False)
 
-# ------------------------------------------------------------
-# 8. UI Output
-# ------------------------------------------------------------
-st.metric("Last Week Price", round(last_price, 2))
-st.metric("Predicted Next Week Price", round(float(prediction), 2))
-
-st.subheader("Prediction History")
-st.dataframe(history.tail(10))
+st.success("Portfolio predictions updated successfully")
