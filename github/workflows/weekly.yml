@@ -1,15 +1,17 @@
-name: Daily Prediction Update
+name: Weekly Stock Prediction (Gradient Boosting)
 
 on:
   schedule:
-    - cron: "0 3 * * 1-5"   # 08:30 IST (Mon–Fri)
+    - cron: "30 3 * * 1"   # Monday 09:00 IST
   workflow_dispatch:
 
 jobs:
-  run:
+  run-weekly:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -20,14 +22,14 @@ jobs:
         run: |
           pip install yfinance pandas numpy scikit-learn
 
-      - name: Run prediction script
+      - name: Run weekly prediction job
         run: |
-          python app.py
+          python weekly_job.py
 
-      - name: Commit updated log
+      - name: Commit results
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add daily_portfolio_log.csv
-          git commit -m "Daily prediction update" || echo "No changes"
+          git add weekly_predictions_log.csv
+          git commit -m "Weekly prediction update" || echo "No changes"
           git push
