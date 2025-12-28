@@ -1,5 +1,5 @@
 # ============================================================
-# WEEKLY STOCK PREDICTION APP (STREAMLIT CLOUD - FINAL FIXED)
+# WEEKLY STOCK PREDICTION APP (STREAMLIT CLOUD - HARDENED)
 # ============================================================
 
 import yfinance as yf
@@ -14,8 +14,7 @@ import streamlit as st
 # Streamlit UI setup
 # ------------------------------------------------------------
 st.set_page_config(page_title="Weekly Share Predictor", layout="centered")
-
-st.title(" Weekly Share Price Prediction")
+st.title("📈 Weekly Share Price Prediction")
 st.write("Free | Web-based | Learns weekly")
 
 # ------------------------------------------------------------
@@ -25,14 +24,9 @@ SYMBOL = "HDFCGOLD.NS"
 HISTORY_FILE = "weekly_predictions.csv"
 
 # ------------------------------------------------------------
-# 1. Fetch historical data from web (Yahoo Finance)
+# 1. Fetch data from Yahoo Finance
 # ------------------------------------------------------------
-df = yf.download(
-    SYMBOL,
-    period="3y",
-    interval="1d",
-    progress=False
-)
+df = yf.download(SYMBOL, period="3y", interval="1d", progress=False)
 
 if df.empty:
     st.error("No data received from Yahoo Finance")
@@ -41,32 +35,41 @@ if df.empty:
 df = df[['Close']].dropna()
 
 # ------------------------------------------------------------
-# 2. Convert daily → weekly data
+# 2. Convert daily → weekly
 # ------------------------------------------------------------
 weekly = df.resample('W').last()
 weekly['prev_close'] = weekly['Close'].shift(1)
 weekly.dropna(inplace=True)
 
 # ------------------------------------------------------------
-# 3. Train regression model
+# 3. Train model
 # ------------------------------------------------------------
-X = weekly[['prev_close']]   # IMPORTANT: named column
+X = weekly[['prev_close']]
 y = weekly['Close']
 
 model = LinearRegression()
 model.fit(X, y)
 
 # ------------------------------------------------------------
-# 4. Predict next week (FIXED FEATURE FORMAT)
+# 4. Predict next week (ABSOLUTE SAFE)
 # ------------------------------------------------------------
-last_price = weekly.iloc[-1]['Close']
+last_price = float(weekly.iloc[-1]['Close'])
 
-#  CRITICAL FIX: prediction input must be a DataFrame
-X_pred = pd.DataFrame([[last_price]], columns=["prev_close"])
-prediction = model.predict(X_pred)[0]
+X_pred = pd.DataFrame(
+    data=[[last_price]],
+    columns=["prev_close"]
+)
+
+raw_pred = model.predict(X_pred)
+
+# 🔐 HARD CAST (handles ndarray, numpy scalar, etc.)
+try:
+    prediction = float(raw_pred[0])
+except Exception:
+    prediction = float(np.asarray(raw_pred).ravel()[0])
 
 # ------------------------------------------------------------
-# 5. Load or create learning history
+# 5. Load or create history
 # ------------------------------------------------------------
 if os.path.exists(HISTORY_FILE):
     history = pd.read_csv(HISTORY_FILE)
@@ -79,14 +82,13 @@ else:
     ])
 
 # ------------------------------------------------------------
-# 6. Learning step (update last week's actual)
+# 6. Learning step
 # ------------------------------------------------------------
-if not history.empty:
-    if pd.isna(history.iloc[-1]["actual_next_week"]):
-        history.loc[history.index[-1], "actual_next_week"] = last_price
+if not history.empty and pd.isna(history.iloc[-1]["actual_next_week"]):
+    history.loc[history.index[-1], "actual_next_week"] = round(last_price, 2)
 
 # ------------------------------------------------------------
-# 7. Save new prediction
+# 7. Save new prediction (SAFE ROUNDING)
 # ------------------------------------------------------------
 new_row = {
     "date": datetime.today().strftime("%Y-%m-%d"),
@@ -99,14 +101,13 @@ history = pd.concat(
     [history, pd.DataFrame([new_row])],
     ignore_index=True
 )
-
 history.to_csv(HISTORY_FILE, index=False)
 
 # ------------------------------------------------------------
 # 8. UI Output
 # ------------------------------------------------------------
 st.metric("Last Week Price", round(last_price, 2))
-st.metric("Predicted Next Week Price", round(prediction, 2))
+st.metric("Predicted Next Week Price", round(float(prediction), 2))
 
-st.subheader("Prediction History (Learning Over Time)")
+st.subheader("Prediction History")
 st.dataframe(history.tail(10))
