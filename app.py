@@ -1,5 +1,5 @@
 # ============================================================
-# WEEKLY STOCK PREDICTION APP (FREE – STREAMLIT CLOUD)
+# WEEKLY STOCK PREDICTION APP (STREAMLIT CLOUD - FIXED)
 # ============================================================
 
 import yfinance as yf
@@ -13,13 +13,13 @@ import streamlit as st
 st.set_page_config(page_title="Weekly Share Predictor", layout="centered")
 
 st.title("📈 Weekly Share Price Prediction")
-st.write("Free | Learns weekly | Web-based")
+st.write("Free | Web-based | Learns weekly")
 
 SYMBOL = "HDFCGOLD.NS"
 HISTORY_FILE = "weekly_predictions.csv"
 
 # -----------------------------
-# Fetch web data
+# Fetch data from web
 # -----------------------------
 df = yf.download(SYMBOL, period="3y", interval="1d", progress=False)
 df = df[['Close']].dropna()
@@ -38,7 +38,10 @@ model = LinearRegression()
 model.fit(X, y)
 
 last_price = weekly.iloc[-1]['Close']
-prediction = model.predict([[last_price]])[0]
+
+# 🔧 FIX: use DataFrame with column name
+X_pred = pd.DataFrame([[last_price]], columns=["prev_close"])
+prediction = model.predict(X_pred)[0]
 
 # -----------------------------
 # Learning history
