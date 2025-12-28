@@ -227,11 +227,15 @@ for r in results:
         st.line_chart(r["daily"])
 
     with right:
-        st.caption(" Weekly Close + Prediction")
-        pw = r["weekly"].to_frame(name="Actual")   # SAFE
+        st.caption("📊 Weekly Close + Prediction")
+        wk = r["weekly"]
+
+        # ALWAYS SAFE: normalize to DataFrame without to_frame()
+        pw = pd.DataFrame({"Actual": np.asarray(wk).ravel()}, index=wk.index)
         pw["Prediction"] = np.nan
         pw.iloc[-1, pw.columns.get_loc("Prediction")] = r["pred"]
         st.line_chart(pw)
+
 
     summary_rows.append({
         "Stock": r["name"],
