@@ -1,6 +1,6 @@
 # ============================================================
-# Kapp.py — Full Portfolio Predictor with Confidence Bands
-# ML: Gradient Boosting + Random Forest (Ensemble)
+# Kapp.py — Full Portfolio Predictor (Continuous Prediction Line)
+# ML: Gradient Boosting + Random Forest Ensemble
 # ============================================================
 
 import streamlit as st
@@ -17,7 +17,7 @@ from sklearn.metrics import mean_absolute_percentage_error
 # STREAMLIT CONFIG
 # ------------------------------------------------------------
 st.set_page_config(page_title="Portfolio Weekly Predictor", layout="wide")
-st.title("📊 Portfolio Weekly Predictor — Interactive with Confidence Bands")
+st.title("📊 Portfolio Weekly Predictor — Continuous Forecast")
 
 # ------------------------------------------------------------
 # PORTFOLIO
@@ -40,6 +40,7 @@ PORTFOLIO = {
 # CONTROLS
 # ------------------------------------------------------------
 c1, c2, c3 = st.columns(3)
+
 with c1:
     HORIZON_LABEL = st.selectbox("Prediction Horizon", ["1 Week", "4 Weeks", "12 Weeks"])
 with c2:
@@ -50,15 +51,13 @@ with c3:
 HORIZON_MAP = {"1 Week": 1, "4 Weeks": 4, "12 Weeks": 12}
 PRED_HORIZON = HORIZON_MAP[HORIZON_LABEL]
 
-MIN_WEEKS = st.slider("Minimum weekly samples", 52, 200, 80, 4)
+MIN_WEEKS = st.slider("Minimum weekly samples", 80, 200, 80, 4)
 
 # ------------------------------------------------------------
 # HELPERS
 # ------------------------------------------------------------
 def ensure_series(x):
-    if isinstance(x, pd.Series):
-        return x
-    return x.iloc[:, 0]
+    return x if isinstance(x, pd.Series) else x.iloc[:, 0]
 
 def make_features(close):
     f = pd.DataFrame(index=close.index)
@@ -109,8 +108,8 @@ def train_predict_ensemble(weekly):
     for tr, te in tscv.split(X):
         gb.fit(X.iloc[tr], y.iloc[tr])
         rf.fit(X.iloc[tr], y.iloc[tr])
-        preds = (gb.predict(X.iloc[te]) + rf.predict(X.iloc[te])) / 2
-        mape.append(mean_absolute_percentage_error(y.iloc[te], preds))
+        p = (gb.predict(X.iloc[te]) + rf.predict(X.iloc[te])) / 2
+        mape.append(mean_absolute_percentage_error(y.iloc[te], p))
 
     acc = max(0.0, 1 - np.mean(mape))
 
@@ -127,13 +126,16 @@ def train_predict_ensemble(weekly):
 
     return future, acc
 
-def backtest_predictions(weekly, lookback=80):
+def backtest_predictions(weekly):
+    lookback = min(120, len(weekly) - PRED_HORIZON - 10)
     preds, dates = [], []
+
     for i in range(-lookback, -PRED_HORIZON):
         train = weekly.iloc[:i]
-        out, _ = train_predict_ensemble(train)
-        preds.append(out[-1])
+        future, _ = train_predict_ensemble(train)
+        preds.append(future[-1])
         dates.append(weekly.index[i + PRED_HORIZON])
+
     return pd.Series(preds, index=dates)
 
 def confidence_band(actual, predicted, z=1.96):
@@ -142,7 +144,7 @@ def confidence_band(actual, predicted, z=1.96):
     return predicted - z * sigma, predicted + z * sigma
 
 # ------------------------------------------------------------
-# DATA LOAD
+# LOAD DATA
 # ------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_weekly(symbol):
@@ -159,32 +161,49 @@ for name, symbol in PORTFOLIO.items():
         weekly = load_weekly(symbol)
         if len(weekly) < MIN_WEEKS:
             continue
+
         future, acc = train_predict_ensemble(weekly)
+        bt = backtest_predictions(weekly)
+
+        pred_series = pd.concat([
+            bt,
+            pd.Series(
+                future,
+                index=pd.date_range(
+                    bt.index[-1] + pd.offsets.Week(1),
+                    periods=len(future),
+                    freq="W-FRI",
+                ),
+            ),
+        ])
+
         last = weekly.iloc[-1]
-        pred = future[-1]
-        sig, _ = signal(last, pred)
+        final_pred = pred_series.iloc[-1]
+        sig, col = signal(last, final_pred)
+
         results.append({
             "name": name,
             "symbol": symbol,
             "weekly": weekly,
-            "future": future,
-            "pred": pred,
+            "pred_series": pred_series,
             "acc": acc,
             "signal": sig,
+            "color": col,
         })
-    except:
+
+    except Exception:
         pass
 
 # ------------------------------------------------------------
-# SUMMARY TABLE
+# SUMMARY
 # ------------------------------------------------------------
 st.markdown("---")
 df_sum = pd.DataFrame([{
     "Stock": r["name"],
     "Signal": r["signal"],
     "Last": round(r["weekly"].iloc[-1], 2),
-    "Predicted": round(r["pred"], 2),
-    "Accuracy %": round(r["acc"] * 100, 2)
+    "Predicted": round(r["pred_series"].iloc[-1], 2),
+    "Accuracy %": round(r["acc"] * 100, 2),
 } for r in results])
 
 st.dataframe(df_sum, use_container_width=True)
@@ -197,43 +216,42 @@ selected = st.selectbox("Select Stock", df_sum["Stock"])
 r = next(x for x in results if x["name"] == selected)
 
 weekly = r["weekly"]
-bt = backtest_predictions(weekly)
-low, high = confidence_band(weekly, bt)
+pred_series = r["pred_series"]
 
-future_idx = pd.date_range(weekly.index[-1] + pd.offsets.Week(1),
-                           periods=len(r["future"]), freq="W-FRI")
+low, high = confidence_band(weekly, pred_series.loc[pred_series.index.intersection(weekly.index)])
 
 fig = go.Figure()
 
 fig.add_trace(go.Scatter(
-    x=weekly.index, y=weekly.values,
-    mode="lines", name="Actual",
-    line=dict(color="lime", width=2)
+    x=weekly.index,
+    y=weekly.values,
+    mode="lines",
+    name="Actual",
+    line=dict(color="lime", width=2),
 ))
 
 fig.add_trace(go.Scatter(
-    x=bt.index, y=bt.values,
-    mode="lines", name="Prediction (Past)",
-    line=dict(color="orange", dash="dot")
+    x=pred_series.index,
+    y=pred_series.values,
+    mode="lines",
+    name="Prediction",
+    line=dict(color="orange", width=3),
 ))
 
 fig.add_trace(go.Scatter(
-    x=high.index, y=high.values,
-    line=dict(width=0), showlegend=False
+    x=high.index,
+    y=high.values,
+    line=dict(width=0),
+    showlegend=False,
 ))
+
 fig.add_trace(go.Scatter(
-    x=low.index, y=low.values,
+    x=low.index,
+    y=low.values,
     fill="tonexty",
     fillcolor="rgba(255,165,0,0.25)",
     line=dict(width=0),
-    name="95% Confidence"
-))
-
-fig.add_trace(go.Scatter(
-    x=future_idx, y=r["future"],
-    mode="lines+markers",
-    name="Forecast",
-    line=dict(color="orange", width=4)
+    name="95% Confidence",
 ))
 
 fig.update_layout(
@@ -241,7 +259,7 @@ fig.update_layout(
     hovermode="x unified",
     xaxis=dict(rangeslider=dict(visible=True)),
     height=600,
-    title=f"{selected} — {HORIZON_LABEL} Forecast ({r['signal']})"
+    title=f"{selected} — {HORIZON_LABEL} Forecast — {r['signal']}",
 )
 
 st.plotly_chart(fig, use_container_width=True)
