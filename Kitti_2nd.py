@@ -1,5 +1,5 @@
 # ============================================================
-# Kapp.py — Portfolio Weekly Stock Predictor (Gradient Boosting)
+# Kitti_2nd.py — Stable Portfolio Weekly Stock Predictor
 # ============================================================
 
 import streamlit as st
@@ -12,11 +12,11 @@ from sklearn.ensemble import GradientBoostingRegressor
 # ------------------------------------------------------------
 # STREAMLIT CONFIG
 # ------------------------------------------------------------
-st.set_page_config(page_title="Portfolio Weekly Predictor (GB)", layout="wide")
-st.title("📊 Portfolio Weekly Predictor – Gradient Boosting")
+st.set_page_config(page_title="Weekly Stock Predictor", layout="wide")
+st.title("📊 Weekly Stock Predictor (Stable Version)")
 
 # ------------------------------------------------------------
-# FULL PORTFOLIO
+# PORTFOLIO
 # ------------------------------------------------------------
 PORTFOLIO = {
     "ANANTRAJ": "ANANTRAJ.NS",
@@ -35,60 +35,45 @@ PORTFOLIO = {
 # ------------------------------------------------------------
 # SIDEBAR CONTROLS
 # ------------------------------------------------------------
-st.sidebar.header("Model Controls")
+st.sidebar.header("Controls")
 
-N_EST = st.sidebar.slider("n_estimators", 100, 800, 300, 50)
-LR = st.sidebar.select_slider("learning_rate", [0.01, 0.03, 0.05, 0.08, 0.1, 0.2], value=0.05)
-MAX_DEPTH = st.sidebar.slider("max_depth", 1, 6, 3)
-SUBSAMPLE = st.sidebar.select_slider("subsample", [0.6, 0.7, 0.8, 0.9, 1.0], value=0.8)
+N_EST = st.sidebar.slider("n_estimators", 100, 500, 300, 50)
+LR = st.sidebar.select_slider("learning_rate", [0.01, 0.03, 0.05, 0.1], value=0.05)
+MAX_DEPTH = st.sidebar.slider("max_depth", 2, 4, 3)
+SUBSAMPLE = st.sidebar.select_slider("subsample", [0.7, 0.8, 0.9, 1.0], value=0.8)
 
-PRED_HORIZON = st.sidebar.selectbox(
+HORIZON_LABEL = st.sidebar.selectbox(
     "Prediction Horizon",
-    {"1 Week": 1, "1 Month": 4, "3 Months": 12, "6 Months": 26, "12 Months": 52},
+    ["1 Week", "1 Month", "3 Months", "6 Months", "12 Months"]
 )
 
-BUY_TH = st.sidebar.slider("BUY threshold (%)", 0.5, 10.0, 2.0, 0.5)
-SELL_TH = st.sidebar.slider("SELL threshold (%)", 0.5, 10.0, 2.0, 0.5)
+HORIZON_MAP = {
+    "1 Week": 1,
+    "1 Month": 4,
+    "3 Months": 12,
+    "6 Months": 26,
+    "12 Months": 52,
+}
 
-MIN_WEEKS = st.sidebar.slider("Minimum weekly samples", 52, 200, 80, 4)
+PRED_HORIZON = HORIZON_MAP[HORIZON_LABEL]
 
-force_rerun = st.sidebar.button("🔄 Re-train from scratch")
-
-# ------------------------------------------------------------
-# SESSION STATE
-# ------------------------------------------------------------
-if "run_id" not in st.session_state:
-    st.session_state.run_id = 0
-
-if force_rerun:
-    st.session_state.run_id += 1
-    st.cache_data.clear()
+BUY_TH = st.sidebar.slider("BUY threshold (%)", 1.0, 5.0, 2.0, 0.5)
+SELL_TH = st.sidebar.slider("SELL threshold (%)", 1.0, 5.0, 2.0, 0.5)
 
 # ------------------------------------------------------------
 # FEATURE ENGINEERING
 # ------------------------------------------------------------
-def make_features(close: pd.Series) -> pd.DataFrame:
-    f = pd.DataFrame(index=close.index)
-    f["ret1"] = close.pct_change(1)
-    f["ret4"] = close.pct_change(4)
-    f["ret8"] = close.pct_change(8)
-    f["vol12"] = f["ret1"].rolling(12).std()
-    f["mom12"] = close / close.shift(12) - 1
-    return f
+def make_features(close):
+    df = pd.DataFrame(index=close.index)
+    df["ret1"] = close.pct_change()
+    df["ret4"] = close.pct_change(4)
+    df["ret8"] = close.pct_change(8)
+    df["vol12"] = df["ret1"].rolling(12).std()
+    df["mom12"] = close / close.shift(12) - 1
+    return df
 
 # ------------------------------------------------------------
-# BUY / HOLD / SELL SIGNAL
-# ------------------------------------------------------------
-def signal(last, pred):
-    pct = (pred - last) / last * 100
-    if pct >= BUY_TH:
-        return "BUY"
-    if pct <= -SELL_TH:
-        return "SELL"
-    return "HOLD"
-
-# ------------------------------------------------------------
-# TRAIN + FORECAST (NaN-SAFE)
+# TRAIN + FORECAST (NO NaNs POSSIBLE)
 # ------------------------------------------------------------
 def train_predict(weekly):
     feats = make_features(weekly)
@@ -98,7 +83,7 @@ def train_predict(weekly):
     data["y"] = target
     data = data.dropna()
 
-    if len(data) < MIN_WEEKS:
+    if len(data) < 60:
         return None
 
     X = data.drop(columns="y")
@@ -113,9 +98,6 @@ def train_predict(weekly):
     )
     model.fit(X, y)
 
-    residuals = y - model.predict(X)
-    sigma = residuals.std()
-
     preds = []
     hist = weekly.copy()
 
@@ -125,162 +107,59 @@ def train_predict(weekly):
         preds.append(p)
         hist.loc[hist.index[-1] + pd.offsets.Week(1)] = p
 
-    return preds, sigma
+    return preds
 
 # ------------------------------------------------------------
-# DIRECTIONAL ACCURACY (NaN-SAFE)
+# SIGNAL
 # ------------------------------------------------------------
-def directional_accuracy(series, horizon):
-    feats = make_features(series)
-    target = series.shift(-horizon)
-
-    data = feats.copy()
-    data["y"] = target
-    data = data.dropna()
-
-    correct, total = 0, 0
-
-    for i in range(100, len(data)):
-        train = data.iloc[:i]
-        X = train.drop(columns="y")
-        y = train["y"]
-
-        model = GradientBoostingRegressor(
-            n_estimators=N_EST,
-            learning_rate=LR,
-            max_depth=MAX_DEPTH,
-            subsample=SUBSAMPLE,
-            random_state=42,
-        )
-        model.fit(X, y)
-
-        pred = model.predict(X.iloc[[-1]])[0]
-
-        last_price = series.loc[X.index[-1]]
-        actual_price = series.loc[X.index[-1] + horizon * pd.offsets.Week(1)]
-
-        if np.sign(actual_price - last_price) == np.sign(pred - last_price):
-            correct += 1
-        total += 1
-
-    return correct / total if total > 0 else np.nan
+def signal(last, pred):
+    pct = (pred - last) / last * 100
+    if pct >= BUY_TH:
+        return "BUY"
+    if pct <= -SELL_TH:
+        return "SELL"
+    return "HOLD"
 
 # ------------------------------------------------------------
-# SHARPE SCORE
+# MAIN LOOP (SAFE)
 # ------------------------------------------------------------
-def sharpe_score(weekly, predicted_price):
-    returns = weekly.pct_change().dropna()
-    vol = returns.std()
-    if vol == 0 or np.isnan(vol):
-        return np.nan
-    exp_ret = (predicted_price - weekly.iloc[-1]) / weekly.iloc[-1]
-    return exp_ret / vol
-
-# ------------------------------------------------------------
-# MAIN COMPUTE (CACHED)
-# ------------------------------------------------------------
-@st.cache_data(show_spinner=True)
-def compute_portfolio(items, run_id):
-    results = []
-
-    for name, symbol in items:
-        df = yf.download(symbol, period="max", interval="1d", progress=False)
-        if df.empty or "Close" not in df:
-            continue
-
-        weekly = df["Close"].resample("W-FRI").last().dropna()
-        if len(weekly) < MIN_WEEKS:
-            continue
-
-        out = train_predict(weekly)
-        if out is None:
-            continue
-
-        preds, sigma = out
-        last = weekly.iloc[-1]
-        final_pred = preds[-1]
-
-        sig = signal(last, final_pred)
-
-        strat_ret = weekly.pct_change().shift(-1)
-        strat_ret = strat_ret * (1 if sig == "BUY" else -1 if sig == "SELL" else 0)
-        strat_ret = strat_ret.dropna()
-
-        equity = (1 + strat_ret).cumprod()
-        peak = equity.cummax()
-        drawdown = (equity - peak) / peak
-
-        results.append({
-            "name": name,
-            "weekly": weekly,
-            "preds": preds,
-            "upper": [p + 1.96 * sigma for p in preds],
-            "lower": [p - 1.96 * sigma for p in preds],
-            "signal": sig,
-            "dir_acc": directional_accuracy(weekly, PRED_HORIZON),
-            "sharpe": sharpe_score(weekly, final_pred),
-            "equity": equity,
-            "drawdown": drawdown,
-            "max_dd": drawdown.min(),
-        })
-
-    return results
-
-# ------------------------------------------------------------
-# RENDER
-# ------------------------------------------------------------
-results = compute_portfolio(list(PORTFOLIO.items()), st.session_state.run_id)
-
-for r in results:
+for name, symbol in PORTFOLIO.items():
     st.markdown("---")
-    st.subheader(r["name"])
+    st.subheader(name)
 
-    st.write("Signal:", r["signal"])
-    st.metric("Directional Accuracy", f"{r['dir_acc']*100:.2f}%")
-    st.metric("Sharpe Score", f"{r['sharpe']:.2f}")
-    st.metric("Max Drawdown", f"{r['max_dd']*100:.2f}%")
+    try:
+        df = yf.download(symbol, period="max", interval="1d", progress=False)
+    except Exception as e:
+        st.warning(f"Download failed: {e}")
+        continue
 
-    wk = r["weekly"]
+    if df.empty or "Close" not in df:
+        st.warning("No data")
+        continue
+
+    weekly = df["Close"].resample("W-FRI").last().dropna()
+
+    out = train_predict(weekly)
+    if out is None:
+        st.warning("Not enough data")
+        continue
+
+    last = weekly.iloc[-1]
+    final_pred = out[-1]
+
+    st.metric("Last Close", f"{last:.2f}")
+    st.metric("Predicted", f"{final_pred:.2f}")
+    st.write("Signal:", signal(last, final_pred))
+
     future_idx = pd.date_range(
-        wk.index[-1] + pd.offsets.Week(1),
-        periods=len(r["preds"]),
+        weekly.index[-1] + pd.offsets.Week(1),
+        periods=len(out),
         freq="W-FRI",
     )
 
-    price_df = pd.concat([
-        pd.DataFrame({"Actual": wk}),
-        pd.DataFrame({
-            "Predicted": r["preds"],
-            "Upper Band": r["upper"],
-            "Lower Band": r["lower"],
-        }, index=future_idx),
+    plot_df = pd.concat([
+        pd.DataFrame({"Actual": weekly}),
+        pd.DataFrame({"Predicted": out}, index=future_idx),
     ])
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.caption("📈 Price Forecast + Confidence Bands")
-        st.line_chart(price_df)
-
-    with c2:
-        st.caption("📊 Equity Curve")
-        st.line_chart(r["equity"])
-
-    st.caption("📉 Drawdown Curve")
-    st.line_chart(r["drawdown"])
-
-# ------------------------------------------------------------
-# SHARPE RANKING
-# ------------------------------------------------------------
-st.markdown("---")
-st.header("📈 Risk-Adjusted Ranking (Sharpe)")
-
-rank_df = pd.DataFrame([{
-    "Stock": r["name"],
-    "Signal": r["signal"],
-    "Sharpe": r["sharpe"],
-    "Directional Accuracy (%)": r["dir_acc"] * 100,
-    "Max Drawdown (%)": r["max_dd"] * 100,
-} for r in results])
-
-rank_df = rank_df.sort_values("Sharpe", ascending=False)
-st.dataframe(rank_df, use_container_width=True)
+    st.line_chart(plot_df)
