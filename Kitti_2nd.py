@@ -127,7 +127,7 @@ def train_predict_ensemble(weekly):
 
     return future, acc
 
-def backtest_predictions(weekly, lookback=52):
+def backtest_predictions(weekly, lookback=80):
     preds, dates = [], []
     for i in range(-lookback, -PRED_HORIZON):
         train = weekly.iloc[:i]
