@@ -16,8 +16,8 @@ from sklearn.metrics import mean_absolute_percentage_error
 # ------------------------------------------------------------
 # STREAMLIT CONFIG
 # ------------------------------------------------------------
-st.set_page_config(page_title="Portfolio Weekly Predictor", layout="wide")
-st.title("📊 Portfolio Weekly Predictor — Continuous Forecast")
+st.set_page_config(page_title="Portfolio Weekly Predictor Krishnareddy", layout="wide")
+st.title("📊 Portfolio Weekly Predictor Krishnareddy  — Continuous Forecast")
 
 # ------------------------------------------------------------
 # PORTFOLIO
