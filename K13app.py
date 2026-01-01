@@ -14,8 +14,8 @@ from sklearn.metrics import mean_absolute_percentage_error
 # ------------------------------------------------------------
 # STREAMLIT CONFIG
 # ------------------------------------------------------------
-st.set_page_config(page_title="Portfolio Weekly Predictor (GB)", layout="wide")
-st.title("📊 Portfolio Weekly Predictor – Gradient Boosting")
+st.set_page_config(page_title="Portfolio Weekly Predictor Krishnareddy (GB)", layout="wide")
+st.title("📊 Portfolio Weekly Predictor Krishnareddy – Gradient Boosting")
 st.write("Next-week prediction + accuracy + BUY/HOLD/SELL (3 years real data)")
 
 # ------------------------------------------------------------
